@@ -120,8 +120,7 @@ jobs:
 
           if (( configured == 0 )); then
             echo "::warning::Signing secrets are not configured; using the debug key for this release build."
-            debug_keystore="${ANDROID_USER_HOME:-$HOME/.android}/debug.keystore"
-            mkdir -p "$(dirname "$debug_keystore")"
+            debug_keystore="$RUNNER_TEMP/debug-fallback.jks"
             keytool -genkeypair -noprompt \
               -keystore "$debug_keystore" \
               -storetype JKS \
@@ -133,6 +132,7 @@ jobs:
               -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
             chmod 600 "$debug_keystore"
+            echo "store_file=$debug_keystore" >> "$GITHUB_OUTPUT"
             echo "mode=debug-fallback" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -149,11 +149,17 @@ jobs:
 
       - name: Lint and build release APK
         env:
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
           SIGNING_STORE_FILE: ${{ steps.signing.outputs.store_file }}
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
+          if [[ "$SIGNING_MODE" == "debug-fallback" ]]; then
+            export SIGNING_STORE_PASSWORD=android
+            export SIGNING_KEY_ALIAS=androiddebugkey
+            export SIGNING_KEY_PASSWORD=android
+          fi
           chmod +x gradlew
           ./gradlew --no-daemon :app:lintRelease :app:releaseSigningInfo :app:assembleRelease
 

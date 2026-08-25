@@ -64,9 +64,13 @@ android {
 
 tasks.register('releaseSigningInfo') {
     doLast {
-        println useCustomReleaseSigning
-                ? 'Release signing: custom keystore'
-                : 'Release signing: debug fallback (development use only)'
+        if (System.getenv('SIGNING_MODE') == 'debug-fallback') {
+            println 'Release signing: ephemeral debug keystore (development use only)'
+        } else {
+            println useCustomReleaseSigning
+                    ? 'Release signing: custom keystore'
+                    : 'Release signing: local debug fallback (development use only)'
+        }
     }
 }
 
