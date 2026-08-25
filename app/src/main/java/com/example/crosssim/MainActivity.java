@@ -17,7 +17,6 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import org.lsposed.hiddenapibypass.HiddenApiBypass;
 
@@ -43,7 +42,7 @@ public class MainActivity extends Activity {
     private TextView shizukuStatus;
     private TextView subscriptionsStatus;
     private LinearLayout subscriptionsContainer;
-    private TextView resultView;
+    private AlertDialog progressDialog;
 
     private final Shizuku.OnBinderReceivedListener binderReceivedListener = this::refreshShizukuStatus;
     private final Shizuku.OnBinderDeadListener binderDeadListener = this::refreshShizukuStatus;
@@ -51,7 +50,7 @@ public class MainActivity extends Activity {
         if (requestCode != SHIZUKU_PERMISSION_REQUEST) return;
 
         refreshShizukuStatus();
-        toast(grantResult == PackageManager.PERMISSION_GRANTED
+        showNotice(grantResult == PackageManager.PERMISSION_GRANTED
                 ? "Shizuku 已授权"
                 : "Shizuku 授权被拒绝");
     };
@@ -85,6 +84,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        dismissProgressDialog();
         Shizuku.removeBinderReceivedListener(binderReceivedListener);
         Shizuku.removeBinderDeadListener(binderDeadListener);
         Shizuku.removeRequestPermissionResultListener(permissionResultListener);
@@ -184,11 +184,6 @@ public class MainActivity extends Activity {
         clearPersistentConfig.setOnClickListener(v -> confirmClearPersistentCarrierConfig());
         addWithTopMargin(root, clearPersistentConfig, gap);
 
-        resultView = new TextView(this);
-        resultView.setTextIsSelectable(true);
-        resultView.setText("等待操作…");
-        addWithTopMargin(root, resultView, gap);
-
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.addView(root);
@@ -213,18 +208,18 @@ public class MainActivity extends Activity {
 
     private void requestShizukuPermission() {
         if (!Shizuku.pingBinder()) {
-            toast("Shizuku 未运行，请先启动 Shizuku");
+            showNotice("Shizuku 未运行，请先启动 Shizuku");
             return;
         }
 
         if (Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED) {
-            toast("已经拥有 Shizuku 权限");
+            showNotice("已经拥有 Shizuku 权限");
             refreshShizukuStatus();
             return;
         }
 
         if (Shizuku.shouldShowRequestPermissionRationale()) {
-            toast("请在 Shizuku 中允许此应用");
+            showNotice("请在 Shizuku 中允许此应用");
         }
         Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST);
     }
@@ -299,7 +294,7 @@ public class MainActivity extends Activity {
         subIdInput.setText(String.valueOf(subId));
         subIdInput.setSelection(subIdInput.length());
         saveSubId();
-        toast("已选择 subId " + subId);
+        showNotice("已选择 subId " + subId);
     }
 
     private void saveSubId() {
@@ -321,7 +316,7 @@ public class MainActivity extends Activity {
             saveSubId();
             return subId;
         } catch (NumberFormatException e) {
-            toast("请输入有效的 subId");
+            showNotice("请输入有效的 subId");
             return null;
         }
     }
@@ -332,7 +327,7 @@ public class MainActivity extends Activity {
         Integer selectedSubId = readSelectedSubId();
         if (selectedSubId == null) return;
         final int subId = selectedSubId;
-        resultView.setText("执行中…");
+        showProgress("正在执行 Cross-SIM 操作…");
 
         new Thread(() -> {
             try {
@@ -349,6 +344,14 @@ public class MainActivity extends Activity {
                             enabled
                     );
 
+                    if (enabled) {
+                        overrideCarrierConfigViaShizuku(
+                                subId,
+                                createCrossSimOverrides(),
+                                false
+                        );
+                    }
+
                     Object value = HiddenApiBypass.invoke(
                             iTelephonyClass,
                             telephony,
@@ -357,10 +360,14 @@ public class MainActivity extends Activity {
                     );
 
                     showResult(
+                            enabled ? "开启成功" : "关闭成功",
                             "调用成功\n"
                                     + "subId = " + subId + "\n"
                                     + "setCrossSimCallingEnabled(" + enabled + ")\n"
                                     + "读取回传 = " + value + "\n\n"
+                                    + (enabled
+                                            ? "已写入普通 CarrierConfig（persistent = false）\n\n"
+                                            : "")
                                     + "可继续通过 adb shell dumpsys isub 验证系统记录。"
                     );
                 } else {
@@ -370,10 +377,16 @@ public class MainActivity extends Activity {
                             "isCrossSimCallingEnabledByUser",
                             subId
                     );
-                    showResult("subId = " + subId + "\nCross-SIM 用户开关 = " + value);
+                    showResult(
+                            "读取完成",
+                            "subId = " + subId + "\nCross-SIM 用户开关 = " + value
+                    );
                 }
             } catch (Throwable t) {
-                showResult("调用失败\n\n" + describeThrowable(t));
+                String actionName = action == Action.ENABLE
+                        ? "开启"
+                        : (action == Action.DISABLE ? "关闭" : "读取");
+                showResult(actionName + "失败", describeThrowable(t));
             }
         }, "cross-sim-call").start();
     }
@@ -385,11 +398,12 @@ public class MainActivity extends Activity {
         if (selectedSubId == null) return;
         final int subId = selectedSubId;
 
-        resultView.setText("正在提交持久化 CarrierConfig 覆盖…");
+        showProgress("正在提交持久化 CarrierConfig 覆盖…");
         new Thread(() -> {
             try {
                 overrideCarrierConfigViaShizuku(subId, createCrossSimOverrides(), true);
                 showResult(
+                        "持久化请求已提交",
                         "持久化请求已提交\n"
                                 + "subId = " + subId + "\n"
                                 + CARRIER_CROSS_SIM_AVAILABLE_KEY + " = true\n"
@@ -398,7 +412,7 @@ public class MainActivity extends Activity {
                                 + "建议等待电话服务刷新，并在重启后再次验证。"
                 );
             } catch (Throwable t) {
-                showResult("持久化 CarrierConfig 失败\n\n" + describeThrowable(t));
+                showResult("持久化失败", describeThrowable(t));
             }
         }, "persist-carrier-config").start();
     }
@@ -410,7 +424,7 @@ public class MainActivity extends Activity {
         if (selectedSubId == null) return;
         final int subId = selectedSubId;
 
-        resultView.setText("正在开启用户开关并提交持久化覆盖…");
+        showProgress("正在开启用户开关并提交持久化覆盖…");
         new Thread(() -> {
             try {
                 Object telephony = getTelephonyViaShizuku();
@@ -433,6 +447,7 @@ public class MainActivity extends Activity {
                 );
 
                 showResult(
+                        "一键操作已提交",
                         "一键操作已提交\n"
                                 + "subId = " + subId + "\n"
                                 + "Cross-SIM 用户开关 = " + value + "\n"
@@ -440,7 +455,7 @@ public class MainActivity extends Activity {
                                 + "CarrierConfig 写入由电话服务异步处理，建议稍后及重启后验证。"
                 );
             } catch (Throwable t) {
-                showResult("一键开启并持久化失败\n\n" + describeThrowable(t));
+                showResult("一键操作失败", describeThrowable(t));
             }
         }, "enable-persist-all").start();
     }
@@ -464,17 +479,18 @@ public class MainActivity extends Activity {
     private void clearPersistentCarrierConfig(int subId) {
         if (!ensureShizukuReady()) return;
 
-        resultView.setText("正在清除 CarrierConfig 覆盖…");
+        showProgress("正在清除 CarrierConfig 覆盖…");
         new Thread(() -> {
             try {
                 overrideCarrierConfigViaShizuku(subId, null, true);
                 showResult(
+                        "清除请求已提交",
                         "清除请求已提交\n"
                                 + "subId = " + subId + "\n\n"
                                 + "该订阅的全部测试 CarrierConfig 覆盖将被移除，并恢复生产配置。"
                 );
             } catch (Throwable t) {
-                showResult("清除 CarrierConfig 覆盖失败\n\n" + describeThrowable(t));
+                showResult("清除失败", describeThrowable(t));
             }
         }, "clear-carrier-config").start();
     }
@@ -539,7 +555,7 @@ public class MainActivity extends Activity {
 
     private boolean ensureShizukuReady() {
         if (!Shizuku.pingBinder()) {
-            toast("Shizuku 未运行");
+            showNotice("Shizuku 未运行");
             return false;
         }
         if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
@@ -549,8 +565,47 @@ public class MainActivity extends Activity {
         return true;
     }
 
-    private void showResult(String text) {
-        runOnUiThread(() -> resultView.setText(text));
+    private void showResult(String title, String text) {
+        showDialog(title, text, true);
+    }
+
+    private void showProgress(String text) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) return;
+
+            dismissProgressDialog();
+            progressDialog = new AlertDialog.Builder(this)
+                    .setTitle("正在处理")
+                    .setMessage(text)
+                    .setCancelable(true)
+                    .create();
+            progressDialog.show();
+        });
+    }
+
+    private void showNotice(String text) {
+        showDialog("提示", text, false);
+    }
+
+    private void showDialog(String title, String text, boolean dismissProgress) {
+        runOnUiThread(() -> {
+            if (dismissProgress) {
+                dismissProgressDialog();
+            }
+            if (isFinishing() || isDestroyed()) return;
+
+            new AlertDialog.Builder(this)
+                    .setTitle(title)
+                    .setMessage(text)
+                    .setPositiveButton("确定", null)
+                    .show();
+        });
+    }
+
+    private void dismissProgressDialog() {
+        if (progressDialog == null) return;
+        progressDialog.dismiss();
+        progressDialog = null;
     }
 
     private String describeThrowable(Throwable throwable) {
@@ -578,10 +633,6 @@ public class MainActivity extends Activity {
             if (description.length() > 6000) break;
         }
         return description.toString();
-    }
-
-    private void toast(String text) {
-        runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_SHORT).show());
     }
 
     private int dp(int value) {

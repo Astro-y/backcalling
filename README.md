@@ -4,7 +4,7 @@
 
 它可以为指定 SIM：
 
-- 读取、开启或关闭用户级 Cross-SIM Calling 开关。
+- 读取、开启或关闭用户级 Cross-SIM Calling 开关；开启时同时写入普通 CarrierConfig。
 - 持久化 Cross-SIM CarrierConfig，使配置在重启后继续保留。
 - 一键开启用户开关并写入持久化配置。
 - 自动检测当前活动 SIM，也支持手动输入 `subId`。
@@ -31,6 +31,10 @@
 7. 根据需要点击“开启 Cross-SIM”或“关闭 Cross-SIM”。
 
 应用会记住最近一次选择的 `subId`。
+
+操作进度、执行结果和错误信息都会通过弹窗显示，不再占用主页面空间。
+
+点击“开启 Cross-SIM”时，应用会同时写入普通 CarrierConfig（`persistent=false`）。该配置无需设备支持持久化，但重启后可能失效；关闭 Cross-SIM 时不会清除 CarrierConfig。
 
 `READ_PHONE_STATE` 权限只用于发现活动 SIM。拒绝该权限后，仍可通过手动输入 `subId` 使用其他功能。
 
