@@ -120,6 +120,19 @@ jobs:
 
           if (( configured == 0 )); then
             echo "::warning::Signing secrets are not configured; using the debug key for this release build."
+            debug_keystore="${ANDROID_USER_HOME:-$HOME/.android}/debug.keystore"
+            mkdir -p "$(dirname "$debug_keystore")"
+            keytool -genkeypair -noprompt \
+              -keystore "$debug_keystore" \
+              -storetype JKS \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            chmod 600 "$debug_keystore"
             echo "mode=debug-fallback" >> "$GITHUB_OUTPUT"
             exit 0
           fi
