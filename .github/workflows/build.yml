@@ -194,8 +194,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           APK_PATH: ${{ steps.artifact.outputs.apk_path }}
         run: |
+          release_notes=".github/release-notes/${GITHUB_REF_NAME}.md"
           if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "$APK_PATH" --clobber
+          elif [[ -f "$release_notes" ]]; then
+            gh release create "$GITHUB_REF_NAME" "$APK_PATH" --verify-tag --notes-file "$release_notes"
           else
             gh release create "$GITHUB_REF_NAME" "$APK_PATH" --verify-tag --generate-notes
           fi
