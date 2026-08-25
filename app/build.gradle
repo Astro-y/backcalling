@@ -2,21 +2,71 @@ plugins {
     id 'com.android.application'
 }
 
+def configurableValue = { String environmentName, String propertyName, String defaultValue ->
+    providers.environmentVariable(environmentName)
+            .orElse(providers.gradleProperty(propertyName))
+            .getOrElse(defaultValue)
+}
+
+def configuredApplicationId = configurableValue('APP_ID', 'appId', 'com.example.crosssim')
+def configuredVersionCode = configurableValue('APP_VERSION_CODE', 'appVersionCode', '4').toInteger()
+def configuredVersionName = configurableValue('APP_VERSION_NAME', 'appVersionName', '1.3.0')
+
+def releaseSigningValues = [
+        storeFile    : System.getenv('SIGNING_STORE_FILE'),
+        storePassword: System.getenv('SIGNING_STORE_PASSWORD'),
+        keyAlias     : System.getenv('SIGNING_KEY_ALIAS'),
+        keyPassword  : System.getenv('SIGNING_KEY_PASSWORD')
+]
+def useCustomReleaseSigning = releaseSigningValues.values().every { value ->
+    value != null && !value.trim().isEmpty()
+}
+
 android {
     namespace 'com.example.crosssim'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.example.crosssim'
+        applicationId configuredApplicationId
         minSdk 31
         targetSdk 35
-        versionCode 2
-        versionName '1.1'
+        versionCode configuredVersionCode
+        versionName configuredVersionName
+    }
+
+    signingConfigs {
+        release {
+            if (useCustomReleaseSigning) {
+                storeFile file(releaseSigningValues.storeFile)
+                storePassword releaseSigningValues.storePassword
+                keyAlias releaseSigningValues.keyAlias
+                keyPassword releaseSigningValues.keyPassword
+            } else {
+                // Keep local and forked CI builds installable without committing a key.
+                // Production releases should provide the four SIGNING_* variables above.
+                initWith signingConfigs.debug
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+        }
     }
 
     dependenciesInfo {
         includeInApk = false
         includeInBundle = false
+    }
+}
+
+tasks.register('releaseSigningInfo') {
+    doLast {
+        println useCustomReleaseSigning
+                ? 'Release signing: custom keystore'
+                : 'Release signing: debug fallback (development use only)'
     }
 }
 

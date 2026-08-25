@@ -2,13 +2,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+    <!-- Optional at runtime: only used to discover active SIM subscription IDs. -->
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
     <application
         android:allowBackup="false"
-        android:label="Cross-SIM Shizuku"
+        android:label="Cross-SIM Calling"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!-- Required: Shizuku server delivers its Binder through this provider. -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"
@@ -25,7 +28,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
     </application>
 
 </manifest>

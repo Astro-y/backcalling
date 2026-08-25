@@ -1,28 +1,182 @@
-name: Build APK
+name: Build Release APK
 
 on:
   workflow_dispatch:
+    inputs:
+      version_name:
+        description: Version name, for example 1.2.0 (optional)
+        required: false
+        type: string
+      version_code:
+        description: Android version code (optional; derived from x.y.z when omitted)
+        required: false
+        type: string
   push:
-    branches: [ main, master ]
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  build-release:
+    name: Build installable release APK
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/actions/wrapper-validation@v6
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Install Android SDK 35
+        shell: bash
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Resolve application version
+        id: version
+        shell: bash
+        env:
+          INPUT_VERSION_NAME: ${{ inputs.version_name }}
+          INPUT_VERSION_CODE: ${{ inputs.version_code }}
+        run: |
+          version_name="$INPUT_VERSION_NAME"
+          version_code="$INPUT_VERSION_CODE"
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version_name="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ -z "$version_name" ]]; then
+            version_name="$(sed -n 's/^appVersionName=//p' gradle.properties | tail -n 1)"
+          fi
+
+          if [[ ! "$version_name" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]{0,49}$ ]]; then
+            echo "::error::Invalid version name: $version_name"
+            exit 1
+          fi
+
+          if [[ -z "$version_code" && "$version_name" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            if (( minor > 999 || patch > 999 )); then
+              echo "::error::Minor and patch versions must not exceed 999."
+              exit 1
+            fi
+            version_code=$((major * 1000000 + minor * 1000 + patch))
+          fi
+
+          if [[ -z "$version_code" ]]; then
+            version_code="$(sed -n 's/^appVersionCode=//p' gradle.properties | tail -n 1)"
+          fi
+
+          if [[ ! "$version_code" =~ ^[1-9][0-9]*$ ]] || (( version_code > 2100000000 )); then
+            echo "::error::Invalid Android version code: $version_code"
+            exit 1
+          fi
+
+          echo "APP_VERSION_NAME=$version_name" >> "$GITHUB_ENV"
+          echo "APP_VERSION_CODE=$version_code" >> "$GITHUB_ENV"
+          echo "version_name=$version_name" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release signing
+        id: signing
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          values=(
+            "$ANDROID_KEYSTORE_BASE64"
+            "$SIGNING_STORE_PASSWORD"
+            "$SIGNING_KEY_ALIAS"
+            "$SIGNING_KEY_PASSWORD"
+          )
+          configured=0
+          for value in "${values[@]}"; do
+            if [[ -n "$value" ]]; then
+              configured=$((configured + 1))
+            fi
+          done
+
+          if (( configured == 0 )); then
+            echo "::warning::Signing secrets are not configured; using the debug key for this release build."
+            echo "mode=debug-fallback" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if (( configured != 4 )); then
+            echo "::error::Release signing is partially configured. Set all four signing secrets."
+            exit 1
+          fi
+
+          store_file="$RUNNER_TEMP/release-key.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$store_file"
+          echo "store_file=$store_file" >> "$GITHUB_OUTPUT"
+          echo "mode=custom-keystore" >> "$GITHUB_OUTPUT"
+
+      - name: Lint and build release APK
+        env:
+          SIGNING_STORE_FILE: ${{ steps.signing.outputs.store_file }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon :app:lintRelease :app:releaseSigningInfo :app:assembleRelease
+
+      - name: Prepare APK artifact
+        id: artifact
+        shell: bash
+        run: |
+          source_apk="app/build/outputs/apk/release/app-release.apk"
+          if [[ ! -f "$source_apk" ]]; then
+            echo "::error::Release APK was not generated at $source_apk"
+            exit 1
+          fi
+
+          mkdir -p dist
+          apk_path="dist/cross-sim-calling-${APP_VERSION_NAME}-release.apk"
+          cp "$source_apk" "$apk_path"
+          sha256sum "$apk_path"
+          echo "apk_path=$apk_path" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release APK artifact
+        uses: actions/upload-artifact@v4
         with:
-          gradle-version: '8.9'
-      - name: Build debug APK
-        run: gradle :app:assembleDebug
-      - uses: actions/upload-artifact@v4
-        with:
-          name: CrossSimShizuku-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: cross-sim-calling-${{ steps.version.outputs.version_name }}-release
+          path: ${{ steps.artifact.outputs.apk_path }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK_PATH: ${{ steps.artifact.outputs.apk_path }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$APK_PATH" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "$APK_PATH" --verify-tag --generate-notes
+          fi

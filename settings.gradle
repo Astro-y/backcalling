@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = 'CrossSimShizuku'
+rootProject.name = 'CrossSimCalling'
 include ':app'
